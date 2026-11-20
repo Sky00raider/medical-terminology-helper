@@ -493,3 +493,117 @@ class NgramBaseline:
 def bits_per_char(nats_per_token: float, n_tokens: int, n_chars: int) -> float:
     """Tokenizer-independent score: total bits divided by characters, so different vocabularies compare fairly."""
     return nats_per_token * n_tokens / n_chars / math.log(2)
+
+
+# --- Milestone 5: Implement a text generation function to complete medical phrases or definitions.
+# Hint: Sampling strategies, text generation loop.
+
+def filter_logits(logits: torch.Tensor, top_k: int | None = None, top_p: float | None = None) -> torch.Tensor:
+    """Top-k keeps the k best tokens; top-p keeps the smallest set whose probabilities sum to p. Others get -inf."""
+    if top_k:
+        kth = torch.topk(logits, min(top_k, logits.size(-1)))[0][..., [-1]]
+        logits = logits.masked_fill(logits < kth, float("-inf"))
+    if top_p and top_p < 1.0:
+        sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+        probs = F.softmax(sorted_logits, dim=-1)
+        drop = probs.cumsum(-1) - probs >= top_p  # the mass before this token already reaches p
+        sorted_logits = sorted_logits.masked_fill(drop, float("-inf"))
+        logits = torch.full_like(logits, float("-inf")).scatter(-1, sorted_idx, sorted_logits)
+    return logits
+
+
+@torch.no_grad()
+def generate_ids(model: GPT, ids: list[int], max_new_tokens: int = 60, temperature: float = 0.8,
+                 top_k: int | None = 40, top_p: float | None = 0.9, repetition_penalty: float = 1.2,
+                 stop=None, seed: int | None = None) -> tuple[list[int], float]:
+    """The generation loop: predict, filter, sample one token, append, repeat.
+
+    temperature <= 0 means greedy. `stop(new_ids) -> bool` ends generation early. Returns (new ids, mean log-prob)."""
+    model.eval()
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    dev = next(model.parameters()).device
+    seq, new, logps = list(ids), [], []
+    for _ in range(max_new_tokens):
+        x = torch.tensor([seq[-model.cfg.block_size:]], device=dev)
+        logits = model(x)[0][0, -1].float().cpu()
+        if repetition_penalty != 1.0:  # make tokens already used in this completion less likely
+            for t in set(new):
+                logits[t] = logits[t] / repetition_penalty if logits[t] > 0 else logits[t] * repetition_penalty
+        if temperature <= 0:
+            nxt = int(torch.argmax(logits))
+        else:
+            probs = F.softmax(filter_logits(logits / temperature, top_k, top_p), dim=-1)
+            nxt = int(torch.multinomial(probs, 1, generator=gen))
+        logps.append(float(F.log_softmax(logits, dim=-1)[nxt]))
+        seq.append(nxt)
+        new.append(nxt)
+        if stop and stop(new):
+            break
+    return new, (sum(logps) / len(logps) if logps else 0.0)
+
+
+@dataclass
+class Completion:
+    text: str
+    score: float  # mean log-probability per token under the model; higher is a more confident completion
+
+
+def _trim(text: str, max_words: int | None) -> str:
+    """Cut at a paragraph break, at max_words, then back to the last full sentence if there is one."""
+    text = text.lstrip("\n").split("\n")[0].rstrip()
+    words = text.split(" ")
+    if max_words and len(words) > max_words:
+        text = " ".join(words[:max_words])
+    m = re.match(r"(.*[.;?!])(?=\s|$)", text, re.S)
+    if m and len(m.group(1)) >= 0.5 * len(text):
+        text = m.group(1)
+    return text.rstrip()
+
+
+def _prompt_ids(tok: BPETokenizer, prompt: str) -> tuple[list[int], bool]:
+    """Words carry their leading space in the vocabulary (' muscle'), so a prompt that ends in a space is encoded
+    without it and the model's next token supplies it. Otherwise the stray ' ' token would be off-distribution."""
+    trailing = prompt.endswith(" ")
+    return tok.encode(prompt[:-1] if trailing else prompt, skip_unknown=True) or [0], trailing
+
+
+def complete(model: GPT, tok: BPETokenizer, prompt: str, max_words: int = 30, n: int = 1, temperature: float = 0.8,
+             top_k: int | None = 40, top_p: float | None = 0.9, repetition_penalty: float = 1.2,
+             seed: int | None = None) -> list[Completion]:
+    """Continue `prompt`. Returns n distinct completions (the text after the prompt), best score first.
+    max_words is the length control: generation stops once the completion has that many words."""
+    ids, trailing_space = _prompt_ids(tok, prompt)
+    max_tokens = int(max_words * 3) + 8
+
+    def done(new):
+        text = tok.decode(new)
+        return "\n" in text.lstrip("\n") or len(text.split()) > max_words
+
+    out: dict[str, Completion] = {}
+    for i in range(n * 3):  # a few spare draws so near-duplicates do not leave us short
+        new, score = generate_ids(model, ids, max_tokens, temperature, top_k, top_p, repetition_penalty, done,
+                                  None if seed is None else seed + i)
+        text = _trim(tok.decode(new), max_words)
+        if trailing_space:
+            text = text.lstrip(" ")  # the prompt already ends with the space this completion started with
+        if text and text not in out:
+            out[text] = Completion(text, score)
+        if len(out) == n:
+            break
+    return sorted(out.values(), key=lambda c: -c.score)
+
+
+@torch.no_grad()
+def next_token_candidates(model: GPT, tok: BPETokenizer, prompt: str, k: int = 5) -> list[tuple[str, float]]:
+    """The k most likely next tokens and their probabilities, e.g. to finish the word being typed."""
+    ids, _ = _prompt_ids(tok, prompt)
+    model.eval()
+    dev = next(model.parameters()).device
+    probs = F.softmax(model(torch.tensor([ids[-model.cfg.block_size:]], device=dev))[0][0, -1].float(), dim=-1)
+    top = torch.topk(probs, k)
+    return [(tok.itos[int(i)], float(p)) for p, i in zip(top.values, top.indices)]
+
+
+def define_prompt(term: str) -> str:
+    """The prompt that makes the model answer in dictionary style: the term, then its definition."""
+    return term.strip().upper() + ". "

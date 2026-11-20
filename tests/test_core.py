@@ -263,3 +263,60 @@ def test_ngram_baseline_probabilities_sum_to_one_and_learn_patterns():
 def test_bits_per_char_is_tokenizer_independent_accounting():
     assert math.isclose(core.bits_per_char(math.log(2), 100, 100), 1.0)
     assert math.isclose(core.bits_per_char(math.log(2), 50, 100), 0.5)
+
+
+# --- Milestone 5: Implement a text generation function to complete medical phrases or definitions.
+@pytest.fixture(scope="module")
+def trained(tok, ids):
+    cfg = core.Config(vocab_size=tok.vocab_size, block_size=32, n_embd=48, n_heads=2, n_layers=2, dropout=0.0)
+    model = core.GPT(cfg)
+    core.train(model, ids, ids, steps=250, batch_size=16, lr=4e-3, eval_every=250, log=lambda *_: None)
+    return model
+
+
+def test_filter_logits_top_k_and_top_p():
+    logits = torch.tensor([[4.0, 3.0, 2.0, 1.0, 0.0]])
+    assert torch.isfinite(core.filter_logits(logits, top_k=2)).sum() == 2
+    probs = torch.softmax(logits, -1)
+    kept = torch.isfinite(core.filter_logits(logits, top_p=0.5)).sum().item()
+    assert kept == 1 and probs[0, 0] > 0.5
+    assert torch.isfinite(core.filter_logits(logits, top_p=0.99)).sum() >= 3
+
+
+def test_greedy_is_deterministic_and_seeded_sampling_is_repeatable(trained, tok):
+    p = tok.encode("Inflammation of the ")
+    a, _ = core.generate_ids(trained, p, 10, temperature=0)
+    b, _ = core.generate_ids(trained, p, 10, temperature=0)
+    assert a == b
+    s1, _ = core.generate_ids(trained, p, 10, seed=3)
+    s2, _ = core.generate_ids(trained, p, 10, seed=3)
+    assert s1 == s2
+
+
+def test_trained_model_completes_a_memorised_definition(trained, tok):
+    out = core.complete(trained, tok, "Gastrocnemius muscle. ", max_words=6, temperature=0, repetition_penalty=1.0)
+    assert out[0].text.startswith("The calf muscle")
+
+
+def test_complete_returns_distinct_options_best_first_and_respects_length(trained, tok):
+    opts = core.complete(trained, tok, "The ", max_words=5, n=3, temperature=1.0, top_p=None, seed=1)
+    assert 1 <= len(opts) <= 3 and len({o.text for o in opts}) == len(opts)
+    assert [o.score for o in opts] == sorted((o.score for o in opts), reverse=True)
+    assert all(len(o.text.split()) <= 5 for o in opts)
+
+
+def test_next_token_candidates_are_sorted_probabilities(trained, tok):
+    top = core.next_token_candidates(trained, tok, "Inflammation of the", k=4)
+    assert len(top) == 4 and all(0 < p <= 1 for _, p in top)
+    assert [p for _, p in top] == sorted((p for _, p in top), reverse=True)
+
+
+def test_trim_cuts_at_paragraph_word_limit_and_sentence_end():
+    assert core._trim("one two three four five six", 3) == "one two three"
+    assert core._trim("The calf muscle of the leg. The cal", 20) == "The calf muscle of the leg."
+    assert core._trim("first\n\nsecond", None) == "first"
+    assert core._trim("\nstarts after a newline\nnot this", None) == "starts after a newline"
+
+
+def test_define_prompt_uses_dictionary_format():
+    assert core.define_prompt(" femur ") == "FEMUR. "
