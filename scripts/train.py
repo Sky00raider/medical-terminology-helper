@@ -16,10 +16,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from app import core  # noqa: E402
 
-PRESETS = {  # vocab, block, n_embd, heads, layers, steps, batch, lr
+PRESETS = {  # vocab, block, n_embd, heads, layers, steps, batch, lr (large: about 17 passes over the corpus, so more dropout)
     "small": dict(vocab=1024, block=128, n_embd=128, n_heads=4, n_layers=4, steps=1800, batch=32, lr=3e-3),
     "medium": dict(vocab=2048, block=128, n_embd=192, n_heads=6, n_layers=6, steps=2500, batch=48, lr=2e-3),  # about 2 s/step on 8 CPU threads: use a GPU
-    "large": dict(vocab=2048, block=256, n_embd=384, n_heads=6, n_layers=6, steps=4000, batch=64, lr=1.5e-3),
+    "large": dict(vocab=2048, block=256, n_embd=384, n_heads=6, n_layers=6, steps=2500, batch=64, lr=1.5e-3, dropout=0.2),
 }
 
 
@@ -61,7 +61,7 @@ def main() -> None:
     print(f"BPE: vocab {tok.vocab_size}, {len(train_ids):,} train tokens, {len(train_ids) / len(train_text):.3f} tokens/char "
           f"({time.time() - t0:.0f}s)")
     cfg = core.Config(vocab_size=tok.vocab_size, block_size=p["block"], n_embd=p["n_embd"], n_heads=p["n_heads"],
-                      n_layers=p["n_layers"], dropout=0.1)
+                      n_layers=p["n_layers"], dropout=p.get("dropout", 0.1))
     model = core.GPT(cfg)
     print(f"GPT: {model.n_params():,} parameters, {p['steps']} steps x {p['batch']} x {p['block']} tokens on {a.device}")
     out = Path(a.out)

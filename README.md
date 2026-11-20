@@ -151,15 +151,7 @@ python scripts/render_demo.py       # -> docs/demo.svg from the real CLI
 pytest
 ```
 
-**Bigger model on a free Colab T4** (the preset is about 11M parameters; I have not run it yet):
-
-```python
-!git clone https://github.com/Sky00raider/medical-terminology-helper && cd medical-terminology-helper && pip install -q torch
-!cd medical-terminology-helper && python scripts/train.py --preset large --device cuda
-!cd medical-terminology-helper && python scripts/evaluate.py
-```
-
-Then download `models/` and `results/` and commit them.
+**Bigger model on a free Colab T4** (about 11M parameters, 2,500 steps; I have not run it yet): open [notebooks/colab_train.ipynb](https://colab.research.google.com/github/Sky00raider/medical-terminology-helper/blob/main/notebooks/colab_train.ipynb) in Colab, pick a T4 runtime and Run all. It trains `--preset large --device cuda`, runs `scripts/evaluate.py` and downloads `result.zip` with `models/` and `results/`, which then get committed. The best-validation checkpoint is kept, so overfitting cannot make the saved model worse.
 
 ## Settings and secrets
 
