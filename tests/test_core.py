@@ -168,3 +168,51 @@ def test_nearest_tokens_returns_other_tokens_by_cosine(tok):
     assert len(near) == 3 and all(t != single and -1 <= s <= 1 for t, s in near)
     with pytest.raises(ValueError):
         core.nearest_tokens(tok, emb.tok.weight, "The femur is")
+
+
+# --- Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
+CFG = core.Config(vocab_size=50, block_size=16, n_embd=32, n_heads=4, n_layers=2, dropout=0.0)
+
+
+def test_attention_rows_sum_to_one_and_future_is_masked():
+    attn = core.CausalSelfAttention(CFG).eval()
+    _, w = attn(torch.randn(2, 8, 32), return_weights=True)
+    assert w.shape == (2, 4, 8, 8)
+    assert torch.allclose(w.sum(-1), torch.ones(2, 4, 8), atol=1e-5)
+    assert torch.all(torch.triu(w, diagonal=1) == 0)
+
+
+def test_changing_a_future_token_does_not_change_earlier_outputs():
+    model = core.GPT(CFG).eval()
+    a = torch.randint(0, 50, (1, 10))
+    b = a.clone()
+    b[0, 7] = (b[0, 7] + 1) % 50
+    la, lb = model(a)[0], model(b)[0]
+    assert torch.allclose(la[:, :7], lb[:, :7], atol=1e-5)
+    assert not torch.allclose(la[:, 7:], lb[:, 7:])
+
+
+def test_block_keeps_shape_and_gpt_outputs_vocab_logits():
+    x = torch.randn(2, 5, 32)
+    assert core.Block(CFG)(x).shape == x.shape
+    model = core.GPT(CFG)
+    logits, loss = model(torch.randint(0, 50, (3, 12)), torch.randint(0, 50, (3, 12)))
+    assert logits.shape == (3, 12, 50) and loss.ndim == 0
+
+
+def test_untrained_loss_is_near_log_vocab_and_weights_are_tied():
+    model = core.GPT(CFG)
+    _, loss = model(torch.randint(0, 50, (16, 16)), torch.randint(0, 50, (16, 16)))
+    assert abs(loss.item() - math.log(50)) < 0.5
+    assert model.lm_head.weight is model.emb.tok.weight
+
+
+def test_attention_matches_a_manual_single_head_computation():
+    cfg = core.Config(vocab_size=10, block_size=8, n_embd=8, n_heads=1, n_layers=1, dropout=0.0)
+    attn = core.CausalSelfAttention(cfg).eval()
+    x = torch.randn(1, 4, 8)
+    q, k, v = attn.qkv(x).split(8, dim=-1)
+    scores = (q @ k.transpose(-2, -1)) / math.sqrt(8)
+    scores = scores.masked_fill(torch.triu(torch.ones(4, 4), 1).bool(), float("-inf"))
+    expected = attn.proj(torch.softmax(scores, -1) @ v)
+    assert torch.allclose(attn(x), expected, atol=1e-5)

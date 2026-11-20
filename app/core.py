@@ -279,3 +279,95 @@ def nearest_tokens(tok: BPETokenizer, emb_weight: torch.Tensor, token: str, k: i
     sims[ids[0]] = -2
     top = torch.topk(sims, k)
     return [(tok.itos[int(i)], float(s)) for s, i in zip(top.values, top.indices)]
+
+
+# --- Milestone 3: Build the causal self-attention mechanism and assemble the transformer block.
+# Hint: Causal self-attention, transformer block assembly.
+
+@dataclass
+class Config:
+    vocab_size: int = 1024
+    block_size: int = 128   # context window in tokens
+    n_embd: int = 128
+    n_heads: int = 4
+    n_layers: int = 4
+    dropout: float = 0.1
+
+
+class CausalSelfAttention(nn.Module):
+    """Masked multi-head scaled dot-product attention. Position t may only look at positions <= t."""
+
+    def __init__(self, cfg: Config):
+        super().__init__()
+        assert cfg.n_embd % cfg.n_heads == 0
+        self.n_heads = cfg.n_heads
+        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)  # queries, keys, values for every head at once
+        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd)
+        self.drop_attn = nn.Dropout(cfg.dropout)
+        self.drop_out = nn.Dropout(cfg.dropout)
+        self.register_buffer("tril", torch.tril(torch.ones(cfg.block_size, cfg.block_size)), persistent=False)
+
+    def forward(self, x, return_weights: bool = False):
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).split(C, dim=-1)
+        q, k, v = (t.view(B, T, self.n_heads, C // self.n_heads).transpose(1, 2) for t in (q, k, v))  # (B, h, T, hs)
+        wei = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5          # every pair of positions, scaled
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # hide the future
+        wei = F.softmax(wei, dim=-1)                                 # each row sums to 1
+        out = self.drop_attn(wei) @ v                                # (B, h, T, hs)
+        out = self.drop_out(self.proj(out.transpose(1, 2).reshape(B, T, C)))
+        return (out, wei) if return_weights else out
+
+
+class FeedForward(nn.Module):
+    """Per-token MLP: expand 4x, GELU, project back. Attention mixes tokens; this transforms each one."""
+
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(cfg.n_embd, 4 * cfg.n_embd), nn.GELU(),
+                                 nn.Linear(4 * cfg.n_embd, cfg.n_embd), nn.Dropout(cfg.dropout))
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class Block(nn.Module):
+    """Transformer block: pre-norm attention and feed-forward, each with a residual connection."""
+
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.ln1, self.ln2 = nn.LayerNorm(cfg.n_embd), nn.LayerNorm(cfg.n_embd)
+        self.attn, self.ff = CausalSelfAttention(cfg), FeedForward(cfg)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        return x + self.ff(self.ln2(x))
+
+
+class GPT(nn.Module):
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.cfg = cfg
+        self.emb = Embeddings(cfg.vocab_size, cfg.n_embd, cfg.block_size)
+        self.blocks = nn.Sequential(*[Block(cfg) for _ in range(cfg.n_layers)])
+        self.ln_f = nn.LayerNorm(cfg.n_embd)
+        self.lm_head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
+        self.apply(self._init)
+        self.lm_head.weight = self.emb.tok.weight  # weight tying: the same matrix reads and writes tokens
+
+    @staticmethod
+    def _init(m):
+        if isinstance(m, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(m.weight, mean=0.0, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+    def forward(self, idx, targets=None):
+        x = self.ln_f(self.blocks(self.emb(idx)))
+        logits = self.lm_head(x)  # (B, T, vocab)
+        if targets is None:
+            return logits, None
+        return logits, F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+
+    def n_params(self) -> int:
+        return sum(p.numel() for p in self.parameters())
