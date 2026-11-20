@@ -320,3 +320,78 @@ def test_trim_cuts_at_paragraph_word_limit_and_sentence_end():
 
 def test_define_prompt_uses_dictionary_format():
     assert core.define_prompt(" femur ") == "FEMUR. "
+
+
+# --- Milestone 6: Create a CLI for students to enter partial phrases and get completions.
+from app import cli  # noqa: E402
+from app.storage import Store  # noqa: E402
+
+
+@pytest.fixture()
+def model_dir(tmp_path, trained, tok):
+    core.save_model(trained, tok, tmp_path / "m")
+    return str(tmp_path / "m")
+
+
+def test_explain_term_splits_greek_and_latin_parts():
+    assert [p for p, _ in core.explain_term("gastroenteritis")] == ["gastr", "o", "enter", "itis"]
+    assert dict(core.explain_term("nephrectomy"))["ectomy"] == "surgical removal"
+    assert dict(core.explain_term("gastroenteritis"))["o"] == "(connecting vowel)"
+    assert core.explain_term("zzzq") == [("zzzq", "?")]
+
+
+def test_overlap_score_counts_the_reference_keywords_used():
+    ref = "The long bone of the thigh"
+    assert core.overlap_score("it is the thigh bone", ref) == pytest.approx(2 / 3)
+    assert core.overlap_score("", ref) == 0.0
+
+
+def test_history_saves_through_the_store(tmp_path):
+    h = core.History(Store(str(tmp_path / "s.json")))
+    assert h.add("a ", "b") == 1 and h.items() == [{"prompt": "a ", "completion": "b"}]
+    h.clear()
+    assert h.items() == []
+
+
+def test_cli_complete_prints_numbered_options(model_dir, capsys):
+    cli.main(["--model", model_dir, "complete", "Inflammation of the", "-n", "2", "--words", "5", "--seed", "1"])
+    out = capsys.readouterr().out
+    assert out.startswith("  1. Inflammation of the")
+
+
+def test_cli_define_next_and_neighbours(model_dir, capsys):
+    cli.main(["--model", model_dir, "define", "femur", "-n", "1", "--seed", "0"])
+    assert "FEMUR. " in capsys.readouterr().out
+    cli.main(["--model", model_dir, "next", "Inflammation of the", "-k", "3"])
+    assert capsys.readouterr().out.count("%") == 3
+    cli.main(["--model", model_dir, "neighbours", "e", "-k", "2"])
+    assert len(capsys.readouterr().out.strip().splitlines()) == 2
+
+
+def test_cli_roots_prints_each_part(capsys):
+    cli.main(["roots", "gastroenteritis"])
+    out = capsys.readouterr().out
+    assert "stomach" in out and "inflammation" in out
+
+
+def test_cli_chat_session_picks_an_option_and_saves(model_dir, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("DATA_PATH", str(tmp_path / "chat.json"))
+    lines = iter(["The heart", "1", "/roots nephritis", "/n 2", "/save", "/saved", "/bogus", "/quit"])
+    cli.main(["--model", model_dir, "chat", "--seed", "1"], inp=lambda _: next(lines))
+    out = capsys.readouterr().out
+    assert "kept: The heart" in out and "n = 2" in out and "saved (" in out and "unknown command" in out
+
+
+def test_cli_quiz_scores_the_students_answer(tmp_path, monkeypatch, capsys):
+    gloss = tmp_path / "g.json"
+    gloss.write_text('[["FEMUR", "The long bone of the thigh."]]')
+    answers = iter(["the long thigh bone"])
+    cli.main(["quiz", "-n", "1", "--no-model", "--glossary", str(gloss)], inp=lambda _: next(answers))
+    out = capsys.readouterr().out
+    assert "Define: FEMUR" in out and "100%" in out
+
+
+def test_cli_without_a_trained_model_gives_a_clear_message(tmp_path):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--model", str(tmp_path / "none"), "complete", "x"])
+    assert "scripts/train.py" in str(e.value)

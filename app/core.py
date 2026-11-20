@@ -607,3 +607,103 @@ def next_token_candidates(model: GPT, tok: BPETokenizer, prompt: str, k: int = 5
 def define_prompt(term: str) -> str:
     """The prompt that makes the model answer in dictionary style: the term, then its definition."""
     return term.strip().upper() + ". "
+
+
+# --- Milestone 6: Create a CLI for students to enter partial phrases and get completions.
+# Hint: User input handling, command-line interaction.
+# Study tools that go beyond completion, built for a medical student.
+
+# Greek and Latin building blocks: prefix (p-), combining form (c), suffix (-s).
+ROOTS = {
+    "a": "without, not", "an": "without, not", "anti": "against", "brady": "slow", "dys": "bad, difficult, painful",
+    "endo": "within", "epi": "upon, above", "hemi": "half", "hyper": "excessive, above", "hypo": "deficient, below",
+    "inter": "between", "intra": "within", "macro": "large", "micro": "small", "peri": "around", "poly": "many",
+    "post": "after", "pre": "before", "sub": "under", "tachy": "fast", "trans": "across", "dia": "through",
+    "arthr": "joint", "cardi": "heart", "cephal": "head", "cerebr": "brain", "chol": "bile", "cyst": "bladder, sac",
+    "cyt": "cell", "derm": "skin", "enter": "intestine", "gastr": "stomach", "gluc": "sugar", "hem": "blood",
+    "hemat": "blood", "hepat": "liver", "hist": "tissue", "my": "muscle", "myel": "marrow, spinal cord",
+    "nephr": "kidney", "neur": "nerve", "oste": "bone", "ot": "ear", "path": "disease", "phleb": "vein",
+    "pneum": "lung, air", "pulmon": "lung", "ren": "kidney", "rhin": "nose", "thromb": "clot", "vas": "vessel",
+    "ven": "vein", "arteri": "artery", "bronch": "airway", "cost": "rib", "crani": "skull", "gloss": "tongue",
+    "laryng": "voice box", "mast": "breast", "ophthalm": "eye", "pharyng": "throat", "thorac": "chest",
+    "tonsill": "tonsil", "ur": "urine", "uter": "uterus", "o": "(connecting vowel)",
+    "algia": "pain", "ectomy": "surgical removal", "emia": "blood condition", "gram": "record", "graphy": "recording",
+    "itis": "inflammation", "logy": "study of", "malacia": "softening", "megaly": "enlargement", "oma": "tumor",
+    "osis": "abnormal condition", "pathy": "disease", "penia": "deficiency", "plasty": "surgical repair",
+    "rrhage": "bursting forth", "rrhea": "flow", "sclerosis": "hardening", "scope": "instrument to view",
+    "stomy": "creation of an opening", "tomy": "cutting into", "uria": "urine condition", "ic": "relating to",
+    "al": "relating to", "ous": "relating to", "ia": "condition",
+}
+
+
+def explain_term(term: str) -> list[tuple[str, str]]:
+    """Split a medical word into known Greek/Latin parts, e.g. gastroenteritis -> gastr + o + enter + itis.
+    Picks the split that explains the most letters. Unknown stretches come back with the meaning '?'."""
+    word = re.sub(r"[^a-z]", "", term.lower())
+    best: dict[int, tuple[int, list[tuple[str, str]]]] = {}
+
+    def solve(i: int) -> tuple[int, list[tuple[str, str]]]:  # (letters explained, parts) for word[i:]
+        if i >= len(word):
+            return 0, []
+        if i in best:
+            return best[i]
+        skip_score, skip_parts = solve(i + 1)  # leave this letter unexplained
+        res = (skip_score, [(word[i], "?")] + skip_parts)
+        for j in range(i + 1, len(word) + 1):
+            part = word[i:j]
+            if part in ROOTS and (len(part) > 1 or part == "o"):
+                score, parts = solve(j)
+                score += j - i if part != "o" else 0
+                if score > res[0] or (score == res[0] and len(parts) + 1 < len(res[1])):
+                    res = (score, [(part, ROOTS[part])] + parts)
+        best[i] = res
+        return res
+
+    parts: list[tuple[str, str]] = []
+    for p, m in solve(0)[1]:  # merge neighbouring unknown letters into one stretch
+        if p == "o" and m == "?" and parts:
+            parts.append((p, ROOTS["o"]))
+        elif m == "?" and parts and parts[-1][1] == "?":
+            parts[-1] = (parts[-1][0] + p, "?")
+        else:
+            parts.append((p, m))
+    return parts
+
+
+_STOP = set("a an and are as at be by for from in is it its of on or that the this to which with when who has have not".split())
+
+
+def content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{3,}", text.lower()) if w not in _STOP}
+
+
+def overlap_score(answer: str, reference: str) -> float:
+    """Share of the reference's content words that the answer also uses (0 to 1). A quick self-check, not a grade."""
+    ref = content_words(reference)
+    return len(ref & content_words(answer)) / len(ref) if ref else 0.0
+
+
+def pick_quiz_entries(glossary: list[tuple[str, str]], n: int = 5, seed: int | None = None) -> list[tuple[str, str]]:
+    return random.Random(seed).sample(glossary, min(n, len(glossary)))
+
+
+class History:
+    """Completions the student chose to keep, stored with app.storage.Store (one JSON file)."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def add(self, prompt: str, completion: str) -> int:
+        items = self.store.get("saved", [])
+        items.append({"prompt": prompt, "completion": completion})
+        self.store.put("saved", items)
+        return len(items)
+
+    def items(self) -> list[dict]:
+        return self.store.get("saved", [])
+
+    def clear(self) -> None:
+        self.store.put("saved", [])
+
+
+DEFAULT_MODEL = "models"
