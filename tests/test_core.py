@@ -118,3 +118,53 @@ def test_committed_corpus_and_glossary_are_well_formed():
     assert len(glossary) > 100 and all(t.isupper() and len(d) >= 40 for t, d in glossary)
     held_out_terms = {t for t, _ in glossary}
     assert not any(f"\n\n{t}. " in "\n\n" + train for t in list(held_out_terms)[:50])   # held-out entries are not trained on
+
+
+# --- Milestone 2: Implement the byte-pair tokenizer and generate embeddings from the medical corpus.
+@pytest.fixture(scope="module")
+def tok():
+    return core.BPETokenizer.train(TEXT, vocab_size=120)
+
+
+def test_bpe_round_trips_text(tok):
+    s = "The femur is the long bone of the thigh."
+    assert tok.decode(tok.encode(s)) == s
+
+
+def test_bpe_merges_frequent_words_into_few_tokens(tok):
+    assert len(tok.tokens("Inflammation of the stomach")) < len("Inflammation of the stomach") / 2
+    assert tok.vocab_size <= 120
+
+
+def test_bpe_never_merges_across_words(tok):
+    for t in tok.tokens("the femur is"):
+        assert t.count(" ") <= 1 and (" " not in t[1:])
+
+
+def test_bpe_unknown_characters_fail_loudly_or_are_skipped(tok):
+    with pytest.raises(ValueError):
+        tok.encode("café")
+    assert tok.decode(tok.encode("café", skip_unknown=True)) == "caf"
+
+
+def test_bpe_save_and_load(tok, tmp_path):
+    tok.save(tmp_path / "t.json")
+    again = core.BPETokenizer.load(tmp_path / "t.json")
+    assert again.encode("The calf muscle") == tok.encode("The calf muscle")
+
+
+def test_embeddings_add_token_and_position(tok):
+    emb = core.Embeddings(tok.vocab_size, 16, 32)
+    out = core.embed_text(tok, emb, "The femur")
+    assert out.shape == (1, len(tok.encode("The femur")), 16)
+    ids = torch.tensor([tok.encode("The femur")])
+    assert torch.allclose(emb(ids), emb.tok(ids) + emb.pos(torch.arange(ids.shape[1])))
+
+
+def test_nearest_tokens_returns_other_tokens_by_cosine(tok):
+    emb = core.Embeddings(tok.vocab_size, 16, 32)
+    single = next(t for t in tok.itos.values() if len(t) == 1 and t.isalpha())
+    near = core.nearest_tokens(tok, emb.tok.weight, single, k=3)
+    assert len(near) == 3 and all(t != single and -1 <= s <= 1 for t, s in near)
+    with pytest.raises(ValueError):
+        core.nearest_tokens(tok, emb.tok.weight, "The femur is")
