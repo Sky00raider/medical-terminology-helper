@@ -13,7 +13,7 @@ A command-line assistant that completes medical phrases and dictionary definitio
 
 ## Quick start
 
-You need Python 3.12.
+You need Python 3.12. Dependencies are pinned in `requirements.txt` (httpx 0.28.1, pytest 9.2.0, torch 2.15.0).
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
@@ -65,14 +65,14 @@ All the model code is in [app/core.py](app/core.py), one section per milestone; 
 
 ## Data and cleaning
 
-| source | what it contributes |
+| source (Internet Archive item) | what it contributes |
 |---|---|
-| Gould, *The Student's Medical Dictionary* (1900) | 8,833 parsed `TERM. definition` entries (494 held out) |
-| Gray, *Anatomy of the Human Body* (1918) | 9,054 paragraphs |
-| Howell, *A Text-book of Physiology* (1921) | 4,575 paragraphs |
-| Lewis, *Anatomy and Physiology for Nurses* (1913) | 1,475 paragraphs |
+| Gould, *The Student's Medical Dictionary* (1900), [`studentsmedical00goul`](https://archive.org/details/studentsmedical00goul) | 8,833 parsed `TERM. definition` entries (494 held out) |
+| Gray, *Anatomy of the Human Body* (1918), [`anatomyofhumanbo1918gray`](https://archive.org/details/anatomyofhumanbo1918gray) | 9,054 paragraphs |
+| Howell, *A Text-book of Physiology* (1921), [`textbookofphysio00howe`](https://archive.org/details/textbookofphysio00howe) | 4,575 paragraphs |
+| Lewis, *Anatomy and Physiology for Nurses* (1913), [`anatomyphysiolog00lewirich`](https://archive.org/details/anatomyphysiolog00lewirich) | 1,475 paragraphs |
 
-The texts are OCR scans from archive.org (`scripts/download_data.py`; all published before 1929). `clean_text` folds typography to ASCII, strips accents, rejoins words hyphenated across lines, drops figure references, headings, page furniture, number tables, all-capital running heads, OCR-garbled paragraphs and duplicates; long paragraphs are cut at sentence ends. `parse_dictionary` turns `Acetate (as-et-at) [acetum, vinegar]. Any salt of acetic acid.` into `ACETATE. Any salt of acetic acid.` and keeps only the leading sentences, so definitions are short and clean. Result: **6.78M training characters (1.10M words, 31,471 distinct)** and **0.43M validation characters**. The validation split is separate paragraphs plus 6% of dictionary entries chosen by a hash of the term; those held-out entries feed `quiz` and the definition test. The tokenizer is trained on the training split only.
+All four were published before 1929 and are in the US public domain. `scripts/download_data.py` fetches each one's plain-text OCR from `https://archive.org/download/<item>/<item>_djvu.txt` into `data/raw/` (git-ignored); the cleaned result is committed, so nothing needs downloading to run the project. `clean_text` folds typography to ASCII, strips accents, rejoins words hyphenated across lines, drops figure references, headings, page furniture, number tables, all-capital running heads, OCR-garbled paragraphs and duplicates; long paragraphs are cut at sentence ends. `parse_dictionary` turns `Acetate (as-et-at) [acetum, vinegar]. Any salt of acetic acid.` into `ACETATE. Any salt of acetic acid.` and keeps only the leading sentences, so definitions are short and clean. Result: **6.78M training characters (1.10M words, 31,471 distinct)** and **0.43M validation characters**. The validation split is separate paragraphs plus 6% of dictionary entries chosen by a hash of the term; those held-out entries feed `quiz` and the definition test. The tokenizer is trained on the training split only.
 
 ## Architecture and training
 

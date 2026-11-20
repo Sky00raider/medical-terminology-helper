@@ -179,7 +179,7 @@ def quiz(args, model, tok, inp=input, out=print) -> float:
 def main(argv: list[str] | None = None, inp=input, out=print) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "hello":
-        return out("Medical Terminology Helper is ready. Open README.md for your milestones.")
+        return out("Medical Terminology Helper is ready. Try: python -m app.cli complete \"Inflammation of the\"")
     if args.command == "roots":
         for t in args.term:
             explain(t, out)

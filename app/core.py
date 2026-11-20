@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from app import llm  # optional tutor (tutor_explain); the model itself never calls it
+
 # --- Milestone 1: Curate a small corpus of public domain medical texts (e.g., anatomy, physiology).
 # Hint: Data collection, text cleaning.
 _FOLD = {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-", "−": "-",
@@ -709,9 +711,7 @@ class History:
 def tutor_explain(term: str, chat=None) -> str:
     """Optional: ask the chat model configured in .env (Ollama, Groq or Gemini; see app/llm.py) for a short explanation.
     It sits beside the from-scratch GPT, which cannot explain terms reliably. The root breakdown is passed along as a hint."""
-    if chat is None:
-        from app import llm
-        chat = llm.chat
+    chat = chat or llm.chat
     parts = ", ".join(f"{p} = {m}" for p, m in explain_term(term) if m != "?")
     messages = [
         {"role": "system", "content": "You are a concise medical terminology tutor. In at most 4 sentences, explain the term "
