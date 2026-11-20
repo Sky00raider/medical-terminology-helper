@@ -271,7 +271,8 @@ def embed_text(tok: BPETokenizer, emb: Embeddings, text: str) -> torch.Tensor:
 
 def nearest_tokens(tok: BPETokenizer, emb_weight: torch.Tensor, token: str, k: int = 8) -> list[tuple[str, float]]:
     """Tokens whose learned embeddings point the same way as `token` (cosine similarity)."""
-    ids = tok.encode(token, skip_unknown=True)
+    inv = {t: i for i, t in tok.itos.items()}
+    ids = [inv[token]] if token in inv else tok.encode(token, skip_unknown=True)
     if len(ids) != 1:
         raise ValueError(f"{token!r} is not a single token (it splits into {tok.tokens(token)})")
     w = F.normalize(emb_weight.detach(), dim=-1)
@@ -371,3 +372,124 @@ class GPT(nn.Module):
 
     def n_params(self) -> int:
         return sum(p.numel() for p in self.parameters())
+
+
+# --- Milestone 4: Set up the training loop and train the GPT model on the medical text data.
+# Hint: Optimizer setup, training loop, loss calculation.
+
+def get_batch(data: torch.Tensor, block_size: int, batch_size: int, gen: torch.Generator | None = None):
+    """Random windows: x is tokens i..i+T-1 and y is the same window shifted one to the right (the next token)."""
+    ix = torch.randint(len(data) - block_size - 1, (batch_size,), generator=gen)
+    x = torch.stack([data[i:i + block_size] for i in ix])
+    y = torch.stack([data[i + 1:i + block_size + 1] for i in ix])
+    return x, y
+
+
+@torch.no_grad()
+def evaluate_loss(model: GPT, data: torch.Tensor, batches: int = 20, batch_size: int = 32, seed: int = 0) -> float:
+    """Mean cross-entropy (nats per token) on fixed random windows of `data`."""
+    model.eval()
+    gen = torch.Generator().manual_seed(seed)
+    dev = next(model.parameters()).device
+    losses = [model(*(t.to(dev) for t in get_batch(data, model.cfg.block_size, batch_size, gen)))[1].item()
+              for _ in range(batches)]
+    model.train()
+    return sum(losses) / len(losses)
+
+
+def lr_at(step: int, steps: int, lr: float, warmup: int = 50, min_ratio: float = 0.1) -> float:
+    """Linear warmup, then cosine decay down to min_ratio * lr."""
+    if step < warmup:
+        return lr * (step + 1) / warmup
+    progress = (step - warmup) / max(1, steps - warmup)
+    return lr * (min_ratio + (1 - min_ratio) * 0.5 * (1 + math.cos(math.pi * progress)))
+
+
+def train(model: GPT, train_ids: torch.Tensor, val_ids: torch.Tensor, steps: int, batch_size: int = 32,
+          lr: float = 3e-3, weight_decay: float = 0.1, eval_every: int = 100, device: str = "cpu",
+          seed: int = 0, log=print, on_eval=None) -> list[dict]:
+    """AdamW + cosine schedule + gradient clipping. Returns the log rows {step, train_loss, val_loss, secs}."""
+    torch.manual_seed(seed)
+    gen = torch.Generator().manual_seed(seed)
+    model.to(device).train()
+    decay = [p for p in model.parameters() if p.dim() >= 2]       # weight matrices decay, biases and norms do not
+    no_decay = [p for p in model.parameters() if p.dim() < 2]
+    opt = torch.optim.AdamW([{"params": decay, "weight_decay": weight_decay}, {"params": no_decay, "weight_decay": 0.0}],
+                            lr=lr, betas=(0.9, 0.95))
+    rows, t0 = [], time.time()
+    for step in range(steps + 1):
+        if step % eval_every == 0 or step == steps:
+            row = {"step": step, "train_loss": round(evaluate_loss(model, train_ids, 10), 4),
+                   "val_loss": round(evaluate_loss(model, val_ids, 10), 4), "secs": round(time.time() - t0, 1)}
+            rows.append(row)
+            log(f"step {step:5d}  train {row['train_loss']:.3f}  val {row['val_loss']:.3f}  {row['secs']:.0f}s")
+            if on_eval:
+                on_eval(row)
+        if step == steps:
+            break
+        for g in opt.param_groups:
+            g["lr"] = lr_at(step, steps, lr)
+        x, y = (t.to(device) for t in get_batch(train_ids, model.cfg.block_size, batch_size, gen))
+        _, loss = model(x, y)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step()
+    return rows
+
+
+def save_model(model: GPT, tok: BPETokenizer, folder) -> None:
+    """Write folder/model.pt (config + weights) and folder/tokenizer.json, so nothing needs retraining."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    torch.save({"config": asdict(model.cfg), "state": {k: v.cpu() for k, v in model.state_dict().items()}},
+               folder / "model.pt")
+    tok.save(folder / "tokenizer.json")
+
+
+def load_model(folder, device: str = "cpu") -> tuple[GPT, BPETokenizer]:
+    folder = Path(folder)
+    ckpt = torch.load(folder / "model.pt", map_location=device, weights_only=True)
+    model = GPT(Config(**ckpt["config"]))
+    model.load_state_dict(ckpt["state"])
+    return model.to(device).eval(), BPETokenizer.load(folder / "tokenizer.json")
+
+
+class NgramBaseline:
+    """Interpolated Witten-Bell n-gram over the same BPE tokens. The yardstick the GPT has to beat."""
+
+    def __init__(self, order: int, vocab_size: int):
+        self.order, self.V = order, vocab_size
+        self.counts = [defaultdict(Counter) for _ in range(order)]  # counts[k][context of k tokens][next token]
+
+    def fit(self, ids: list[int]) -> "NgramBaseline":
+        for k in range(self.order):
+            for i in range(k, len(ids)):
+                self.counts[k][tuple(ids[i - k:i])][ids[i]] += 1
+        return self
+
+    def prob(self, context: list[int], tok: int) -> float:
+        p = 1.0 / self.V
+        for k in range(self.order):                        # lowest order first, then refine with longer contexts
+            if k > len(context):
+                break
+            c = self.counts[k].get(tuple(context[len(context) - k:]) if k else ())
+            if not c:
+                break
+            total, types = sum(c.values()), len(c)
+            lam = total / (total + types)
+            p = lam * c.get(tok, 0) / total + (1 - lam) * p
+        return p
+
+    def distribution(self, context: list[int]) -> list[float]:
+        return [self.prob(context, t) for t in range(self.V)]
+
+    def nll(self, ids: list[int]) -> float:
+        """Mean negative log-likelihood (nats per token) of ids[1:]."""
+        n = self.order
+        return -sum(math.log(self.prob(ids[max(0, i - n + 1):i], ids[i])) for i in range(1, len(ids))) / (len(ids) - 1)
+
+
+def bits_per_char(nats_per_token: float, n_tokens: int, n_chars: int) -> float:
+    """Tokenizer-independent score: total bits divided by characters, so different vocabularies compare fairly."""
+    return nats_per_token * n_tokens / n_chars / math.log(2)

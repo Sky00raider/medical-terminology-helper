@@ -216,3 +216,50 @@ def test_attention_matches_a_manual_single_head_computation():
     scores = scores.masked_fill(torch.triu(torch.ones(4, 4), 1).bool(), float("-inf"))
     expected = attn.proj(torch.softmax(scores, -1) @ v)
     assert torch.allclose(attn(x), expected, atol=1e-5)
+
+
+# --- Milestone 4: Set up the training loop and train the GPT model on the medical text data.
+@pytest.fixture(scope="module")
+def ids(tok):
+    return torch.tensor(tok.encode(TEXT))
+
+
+def test_get_batch_targets_are_inputs_shifted_by_one(ids):
+    x, y = core.get_batch(ids, 16, 4, torch.Generator().manual_seed(0))
+    assert x.shape == y.shape == (4, 16)
+    assert torch.equal(x[:, 1:], y[:, :-1])
+
+
+def test_lr_schedule_warms_up_then_decays():
+    lrs = [core.lr_at(s, 100, 1.0, warmup=10) for s in range(100)]
+    assert lrs[0] < lrs[9] <= 1.0 and lrs[-1] < lrs[20] and lrs[-1] >= 0.1 - 1e-9
+
+
+def test_training_lowers_the_loss(tok, ids):
+    cfg = core.Config(vocab_size=tok.vocab_size, block_size=16, n_embd=32, n_heads=2, n_layers=2, dropout=0.0)
+    model = core.GPT(cfg)
+    rows = core.train(model, ids, ids, steps=60, batch_size=8, lr=3e-3, eval_every=30, log=lambda *_: None)
+    assert rows[-1]["train_loss"] < rows[0]["train_loss"] - 0.5
+    assert [r["step"] for r in rows] == [0, 30, 60]
+
+
+def test_save_and_load_give_identical_logits(tok, tmp_path):
+    cfg = core.Config(vocab_size=tok.vocab_size, block_size=16, n_embd=32, n_heads=2, n_layers=1)
+    model = core.GPT(cfg).eval()
+    core.save_model(model, tok, tmp_path)
+    again, tok2 = core.load_model(tmp_path)
+    x = torch.randint(0, tok.vocab_size, (1, 8))
+    assert torch.allclose(model(x)[0], again(x)[0])
+    assert tok2.encode("the femur") == tok.encode("the femur")
+
+
+def test_ngram_baseline_probabilities_sum_to_one_and_learn_patterns():
+    ng = core.NgramBaseline(3, vocab_size=6).fit([0, 1, 2, 3] * 50)
+    assert math.isclose(sum(ng.distribution([0, 1])), 1.0, rel_tol=1e-6)
+    assert ng.prob([0, 1], 2) > 0.8
+    assert ng.nll([0, 1, 2, 3] * 5) < math.log(6)
+
+
+def test_bits_per_char_is_tokenizer_independent_accounting():
+    assert math.isclose(core.bits_per_char(math.log(2), 100, 100), 1.0)
+    assert math.isclose(core.bits_per_char(math.log(2), 50, 100), 0.5)
