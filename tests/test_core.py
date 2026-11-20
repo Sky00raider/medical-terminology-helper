@@ -395,3 +395,32 @@ def test_cli_without_a_trained_model_gives_a_clear_message(tmp_path):
     with pytest.raises(SystemExit) as e:
         cli.main(["--model", str(tmp_path / "none"), "complete", "x"])
     assert "scripts/train.py" in str(e.value)
+
+
+def test_tutor_explain_sends_the_term_and_root_hints_and_returns_the_reply():
+    seen = {}
+
+    def fake_chat(messages, **options):
+        seen["messages"], seen["options"] = messages, options
+        return "  Inflammation of the stomach and intestines.  "
+
+    reply = core.tutor_explain("gastroenteritis", fake_chat)
+    assert reply == "Inflammation of the stomach and intestines."
+    user = seen["messages"][1]["content"]
+    assert "gastroenteritis" in user and "gastr = stomach" in user and "itis = inflammation" in user
+    assert seen["options"]["temperature"] == 0.2
+
+
+def test_cli_explain_shows_roots_then_the_tutor_reply(monkeypatch, capsys):
+    monkeypatch.setattr(core, "tutor_explain", lambda term, ask=None: f"{term} means gut inflammation.")
+    cli.main(["explain", "gastroenteritis"])
+    out = capsys.readouterr().out
+    assert "gastr + o + enter + itis" in out and "gastroenteritis means gut inflammation." in out
+
+
+def test_cli_explain_without_a_configured_model_still_prints_the_roots(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)                       # no .env here
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    cli.main(["explain", "nephritis"])
+    out = capsys.readouterr().out
+    assert "nephr + itis" in out and "tutor unavailable" in out and "LLM_MODEL" in out

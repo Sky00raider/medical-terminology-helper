@@ -6,6 +6,7 @@
   next "inflammation of the"   the most likely next tokens, with probabilities
   quiz                         flashcards from held-out dictionary entries, scored against the real definition
   roots gastroenteritis        break a term into Greek/Latin parts
+  explain gastroenteritis      roots plus a short tutor explanation from the chat model set in .env (optional)
   neighbours cardi             tokens the model embeds close to a token
   saved                        completions you kept
 """
@@ -16,7 +17,7 @@ from app import core
 from app.storage import Store
 
 HELP_CHAT = ("Type a partial phrase to complete it. Commands: /define TERM, /roots TERM, /n K, /words N, /temp T, "
-             "/save, /saved, /help, /quit. After options appear, type 1, 2, ... to keep one and continue from it.")
+             "/explain TERM, /save, /saved, /help, /quit. After options appear, type 1, 2, ... to keep one and continue from it.")
 
 
 def _model(args):
@@ -62,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--no-model", action="store_true", help="skip the model's answer, just score yours")
     r = sub.add_parser("roots", help="split a term into Greek/Latin parts")
     r.add_argument("term", nargs="+")
+    ex = sub.add_parser("explain", help="roots plus a tutor explanation from the chat model in .env")
+    ex.add_argument("term")
     nb = sub.add_parser("neighbours", help="nearest tokens in embedding space")
     nb.add_argument("token", help="a single token such as 'cardi' or ' heart'")
     nb.add_argument("-k", type=int, default=8)
@@ -86,6 +89,15 @@ def explain(term: str, out=print) -> None:
     out(f"{term}: " + " + ".join(p for p, _ in parts))
     for p, meaning in parts:
         out(f"  {p:<12} {meaning}")
+
+
+def tutor(term: str, out=print, ask=None) -> None:
+    """Word roots, then the optional chat-model explanation (needs LLM_MODEL in .env; see .env.example)."""
+    explain(term, out)
+    try:
+        out(core.tutor_explain(term, ask))
+    except Exception as e:  # no model configured, server down, bad key: say so, keep the roots
+        out(f"(tutor unavailable: {e})")
 
 
 def chat(model, tok, args, store, inp=input, out=print) -> None:
@@ -121,6 +133,8 @@ def chat(model, tok, args, store, inp=input, out=print) -> None:
                 out(f"usage: {cmd} <number>")
         elif cmd == "/roots" and rest:
             explain(rest, out)
+        elif cmd == "/explain" and rest:
+            tutor(rest, out)
         elif cmd == "/saved":
             for i, it in enumerate(history.items(), 1):
                 out(f"{i}. {it['prompt']}{it['completion']}")
@@ -170,6 +184,8 @@ def main(argv: list[str] | None = None, inp=input, out=print) -> None:
         for t in args.term:
             explain(t, out)
         return
+    if args.command == "explain":
+        return tutor(args.term, out)
     if args.command == "saved":
         for i, it in enumerate(core.History(Store()).items(), 1):
             out(f"{i}. {it['prompt']}{it['completion']}")

@@ -21,7 +21,7 @@ pip install -r requirements.txt
 python -m app.cli complete "Inflammation of the"
 ```
 
-The trained model (`models/model.pt`, 3.8 MB) and the cleaned corpus are committed, so nothing is downloaded and nothing needs training. Run the tests with `pytest` (48 tests, about 10 seconds, no network).
+The trained model (`models/model.pt`, 3.8 MB) and the cleaned corpus are committed, so nothing is downloaded and nothing needs training. Run the tests with `pytest` (51 tests, about 10 seconds, no network).
 
 ## Commands
 
@@ -33,6 +33,7 @@ The trained model (`models/model.pt`, 3.8 MB) and the cleaned corpus are committ
 | `next "The femur is the" -k 5` | the most likely next tokens with probabilities (finishing the word you are typing) |
 | `quiz -n 5` | flashcards: you define a held-out dictionary term, then see the real definition, the model's attempt and your key-word overlap |
 | `roots gastroenteritis` | split a term into Greek/Latin parts (gastr + o + enter + itis) with meanings |
+| `explain gastroenteritis` | the roots, then a short explanation from an optional chat model (see Settings below); the from-scratch GPT cannot explain terms reliably, so this is clearly a separate tutor |
 | `neighbours " heart"` | tokens the model embeds closest to a token |
 | `saved` | completions you kept (`complete --pick` saves one) |
 
@@ -44,7 +45,7 @@ The brief asks for BPE, a causal-attention GPT, training, generation and a CLI. 
 
 - **Several ranked completions and a length control** (the stretch ideas), plus saving and loading the model (`save_model`/`load_model`, committed checkpoint).
 - **Definition mode, an interactive chat, next-token candidates** and a **study quiz** that scores a student's own definition against held-out dictionary entries the model never saw.
-- **A Greek/Latin root explainer** (`roots`), a **saved-completions history** (through the starter's `Store`) and **embedding neighbours**.
+- **A Greek/Latin root explainer** (`roots`), an **optional tutor** (`explain`) that calls an Ollama, Groq or Gemini chat model through the starter's `app/llm.py`, a **saved-completions history** (through the starter's `Store`) and **embedding neighbours**.
 - **A baseline and honest measurement**: interpolated n-gram models (orders 1 to 4) over the same BPE tokens, scored in bits per character (tokenizer-independent), next-token accuracy and definition overlap (`scripts/evaluate.py`).
 - **A tokenizer-aware prompt rule**: words carry their leading space inside tokens, so a prompt that ends in a space is encoded without it. Without this, `"Gastrocnemius muscle. "` produced garbage in a test that the model had memorised.
 - A **GPU preset** (`--preset large`) for Colab; the CPU run is deliberately light.
@@ -138,7 +139,7 @@ $ python -m app.cli define pericarditis -n 2 --seed 3
 - Single training run, single seed; no confidence intervals. The key-word overlap metric is crude (it ignores synonyms and word order) and the n-gram accuracies use a subsample.
 - The corpus is OCR text; some noise survives cleaning (garbled words in dictionary entries, "I." for "1.").
 - Rare terms are fragmented by the small BPE vocabulary (finding 5); the context is 128 tokens.
-- The `.env`/`app/llm.py` chat settings from the starter are not used: everything runs locally.
+- `explain` needs a chat model of your own (a local Ollama or a free Groq/Gemini key) and is not part of the evaluation; without one it prints the roots and says the tutor is unavailable. Everything else runs locally with no key.
 
 ## Reproduce everything
 
@@ -155,4 +156,4 @@ pytest
 
 ## Settings and secrets
 
-Model settings from the starter live in `.env`, which git ignores; this project does not need one. Never commit `.env` or a key.
+Only the optional `explain` command uses `.env`: copy `.env.example` to `.env` and fill in the three `LLM_*` lines for Ollama, Groq or Gemini. `.env` is ignored by git; never commit it or paste a key into code. The rest of the project needs no settings (`DATA_PATH` only moves the saved-completions file).

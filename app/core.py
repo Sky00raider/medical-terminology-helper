@@ -706,4 +706,20 @@ class History:
         self.store.put("saved", [])
 
 
+def tutor_explain(term: str, chat=None) -> str:
+    """Optional: ask the chat model configured in .env (Ollama, Groq or Gemini; see app/llm.py) for a short explanation.
+    It sits beside the from-scratch GPT, which cannot explain terms reliably. The root breakdown is passed along as a hint."""
+    if chat is None:
+        from app import llm
+        chat = llm.chat
+    parts = ", ".join(f"{p} = {m}" for p, m in explain_term(term) if m != "?")
+    messages = [
+        {"role": "system", "content": "You are a concise medical terminology tutor. In at most 4 sentences, explain the term "
+                                      "for a first-year student: its meaning, what its word parts mean, and one example of use. "
+                                      "If you are not sure, say so."},
+        {"role": "user", "content": f"Term: {term}\nWord parts found: {parts or 'none'}"},
+    ]
+    return chat(messages, temperature=0.2, max_tokens=300).strip()
+
+
 DEFAULT_MODEL = "models"
