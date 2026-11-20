@@ -9,7 +9,7 @@ A command-line assistant that completes medical phrases and dictionary definitio
 
 <sub>Real output of the commands shown, rendered by `python scripts/render_demo.py`.</sub>
 
-> **Headline (be aware of what this does and does not show).** The model writes fluent anatomical English: 99.6% of the words it generates are real words from the corpus, and "Inflammation of the" gets completed with organs ("urethra", "abdominal wall"). But the 0.94M-parameter model, trained for 13 minutes on a laptop CPU, does **not** yet beat a 4-gram baseline on held-out text (1.47 against 1.36 bits per character), and its definitions are generic frames ("A pain of the pancreas") rather than correct meanings (1.7% key-word overlap with the real definition). The numbers, the reasons and the next step (a bigger model on a free Colab T4, one command) are below.
+> **Headline.** The 11.5M-parameter GPT, trained for 20 minutes on a free Colab T4, beats a 4-gram baseline on held-out text: **1.14 against 1.35 bits per character**, with next-token top-1 accuracy of 43.7% against 41.6% (top-5: 65.8% against 62.1%). A first, smaller model (0.94M parameters, 13 minutes on a laptop CPU) did *not* beat the 4-gram (1.47 bits per character), so scale mattered. What the model has **not** learned is what the terms mean: it writes fluent definitions in the right form (`GASTRITIS. Inflammation of the cornea.`) but with the wrong content, and its key-word overlap with the real definition is only 4.0%, no better than the baseline. Details, caveats and limits are below.
 
 ## Quick start
 
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 python -m app.cli complete "Inflammation of the"
 ```
 
-The trained model (`models/model.pt`, 3.8 MB) and the cleaned corpus are committed, so nothing is downloaded and nothing needs training. Run the tests with `pytest` (51 tests, about 10 seconds, no network).
+The trained model (`models/model.pt`, 49 MB) and the cleaned corpus are committed, so nothing is downloaded and nothing needs training. Run the tests with `pytest` (51 tests, about 10 seconds, no network).
 
 ## Commands
 
@@ -48,7 +48,7 @@ The brief asks for BPE, a causal-attention GPT, training, generation and a CLI. 
 - **A Greek/Latin root explainer** (`roots`), an **optional tutor** (`explain`) that calls an Ollama, Groq or Gemini chat model through the starter's `app/llm.py`, a **saved-completions history** (through the starter's `Store`) and **embedding neighbours**.
 - **A baseline and honest measurement**: interpolated n-gram models (orders 1 to 4) over the same BPE tokens, scored in bits per character (tokenizer-independent), next-token accuracy and definition overlap (`scripts/evaluate.py`).
 - **A tokenizer-aware prompt rule**: words carry their leading space inside tokens, so a prompt that ends in a space is encoded without it. Without this, `"Gastrocnemius muscle. "` produced garbage in a test that the model had memorised.
-- A **GPU preset** (`--preset large`) for Colab; the CPU run is deliberately light.
+- **Two presets:** `small` (0.94M parameters, a light CPU run) and `large` (11.5M, a Colab T4), plus a one-click Colab notebook. The committed model is the large one.
 
 ## Milestones
 
@@ -57,7 +57,7 @@ The brief asks for BPE, a causal-attention GPT, training, generation and a CLI. 
 | 1 | Curate a public-domain corpus, clean it | `scripts/download_data.py`, `scripts/build_corpus.py`, `clean_text`, `parse_dictionary` in `app/core.py`, `data/`, `results/corpus_stats.md` |
 | 2 | Byte-pair tokenizer and embeddings | `BPETokenizer`, `Embeddings`, `nearest_tokens` |
 | 3 | Causal self-attention and the transformer block | `CausalSelfAttention`, `Block`, `GPT` |
-| 4 | Training loop on the medical text | `train`, `lr_at`, `scripts/train.py`, `models/`, `results/loss.csv` |
+| 4 | Training loop on the medical text | `train`, `lr_at`, `scripts/train.py`, `notebooks/colab_train.ipynb`, `models/`, `results/loss.csv` |
 | 5 | Generation: sampling strategies and the loop | `filter_logits`, `generate_ids`, `complete`, `scripts/evaluate.py` |
 | 6 | The CLI | `app/cli.py` |
 
@@ -77,68 +77,74 @@ All four were published before 1929 and are in the US public domain. `scripts/do
 ## Architecture and training
 
 ```
-text -> BPE tokens (vocab 1024) -> token embedding + position embedding           (B, T, 128)
-     -> 4 x [ LayerNorm -> causal multi-head self-attention (4 heads) -> + residual
+text -> BPE tokens (vocab 2048) -> token embedding + position embedding           (B, T, 384)
+     -> 6 x [ LayerNorm -> causal multi-head self-attention (6 heads) -> + residual
               LayerNorm -> feed-forward (4x, GELU)                    -> + residual ]
      -> LayerNorm -> output layer tied to the token embedding -> next-token distribution
 ```
 
-0.94M parameters, context 128 tokens. AdamW (lr 3e-3, weight decay 0.1 on matrices only), linear warm-up then cosine decay, gradient clipping at 1.0, batch 32, 1,800 steps (7.4M tokens, about 3 passes over the corpus), 795 seconds on 8 CPU threads at below-normal priority. Validation loss fell from 6.94 (uniform guessing is ln 1024 = 6.93) to 2.96, with training loss 2.95, so the model is still **underfitting**: it is limited by size and time, not by memorising.
+**The committed model (`--preset large`):** 11,525,376 parameters, context 256 tokens, dropout 0.2. AdamW (lr 1.5e-3, weight decay 0.1 on matrices only), linear warm-up then cosine decay, gradient clipping at 1.0, batch 64, 2,500 steps (41M tokens, about 21 passes over the corpus), 1,220 seconds on a Colab T4. Validation loss fell from 7.71 (uniform guessing is ln 2048 = 7.62) to 2.743 while training loss reached 2.410, so it is starting to overfit but was still improving at the last step (2.748 to 2.743 over the final 100 steps); the best-validation checkpoint is the one saved.
+
+**The first model (`--preset small`):** 0.94M parameters, vocab 1024, context 128, 1,800 steps, 795 seconds on 8 CPU threads at below-normal priority. Its validation loss was 2.96 with training loss 2.95 (underfitting). I keep it as a point of comparison; its numbers below come from that earlier run and were not regenerated.
 
 ## Results
 
-Full tables, side-by-side definitions and the training curve are in [results/results.md](results/results.md), produced by `python scripts/evaluate.py`.
+Full tables, side-by-side definitions and the training curve are in [results/results.md](results/results.md), produced by `python scripts/evaluate.py` on the committed model.
 
-**Predicting held-out text** (146,944 predictions on text the model never saw; every model uses the same BPE tokens):
+**Predicting held-out text** (123,648 predictions on 483 windows of text the model never saw; the n-gram models use the same BPE tokens):
 
 | model | bits per character | next-token top-1 | top-5 |
 |---|---|---|---|
-| GPT (this project) | 1.472 | 36.9% | 60.0% |
-| unigram | 2.925 | 7.5% | 17.8% |
-| 2-gram | 1.842 | 23.0% | 47.6% |
-| 3-gram | 1.412 | 39.5% | 65.2% |
-| 4-gram | **1.363** | **44.4%** | **67.2%** |
+| **GPT large** (this project, 11.5M) | **1.141** | **43.7%** | **65.8%** |
+| 4-gram | 1.351 | 41.6% | 62.1% |
+| 3-gram | 1.362 | 38.0% | 60.9% |
+| 2-gram | 1.645 | 22.9% | 47.9% |
+| unigram | 2.605 | 6.9% | 20.6% |
+| *GPT small (0.94M, earlier run, vocab 1024; its 4-gram scored 1.363)* | *1.472* | *36.9%* | *60.0%* |
 
-(The n-gram accuracies use a subsample of 800 positions; the GPT uses all of them.)
+Bits per character divides the total bits by the characters covered, so scores are comparable across the two tokenizers. The n-gram accuracies use a subsample of 1,600 positions; the GPT uses all of them. The large GPT sees up to 256 tokens of context, the n-grams at most 3 (and the small GPT 128).
 
 **Defining 80 held-out dictionary terms** (prompt `TERM. `, scored against Gould's real definition):
 
 | method | key-word overlap | real-word rate | mean words |
 |---|---|---|---|
-| GPT greedy | 1.7% | 99.6% | 5.4 |
-| GPT sampled (T=0.7) | 1.2% | 93.2% | 7.2 |
-| 4-gram greedy | 3.6% | 99.8% | 13.5 |
+| GPT large, greedy | 4.0% | 100.0% | 7.6 |
+| GPT large, sampled (T=0.7) | 4.1% | 97.7% | 9.0 |
+| 4-gram, greedy | 4.6% | 100.0% | 9.8 |
 
-Real outputs (`temperature 0.7, seed 0`):
+Real outputs (temperature 0.7, seed 0; the prompt is on the left):
 
 ```
-Inflammation of the           -> splanchnic cavity.
-The function of the kidney    -> is in the pelvic cavity.
-Blood is carried from the heart by -> the brain.
-PERICARDITIS.                 -> Pertaining to or characterized by the mesentery.
-ANEURYSM.                     -> Situated in which the bottom of a little mye.
+Inflammation of the           -> urethra.
+GASTRITIS.                    -> Inflammation of the cornea.
+PERICARDITIS.                 -> Inflammation of the cornea.
+HYPERTENSION.                 -> The act of bacteria.
+The femur is                  -> the largest, and consists of three layers - an external layer. ...
+The pancreas secretes         -> that secretin is split off from the pancreatic duct. ...
 ```
 
 ```
 $ python -m app.cli define pericarditis -n 2 --seed 3
-  1. PERICARDITIS. The formation of multipital.   [-1.75]
-  2. PERICARDITIS. The example of the functions of the genital organ.   [-1.87]
+  1. PERICARDITIS. Inflammation of the temporal bone.   [-0.65]
+  2. PERICARDITIS. Inflammation of the spinal cord and a tract of the spinal cord.   [-1.20]
 ```
 
 ## Findings
 
-1. **It learned the register, not the facts.** Completions are grammatical, use the right vocabulary (organs, cavities, vessels; 99.6% real words) and follow the dictionary format, but the content is mostly wrong ("Blood is carried from the heart by the brain"). The model knows what a definition looks like, not what pericarditis is.
-2. **At this size the GPT loses to a 4-gram** on the same tokens (1.47 against 1.36 bits per character, 36.9% against 44.4% top-1). It beats the 2-gram and unigram by a wide margin but also loses narrowly to the 3-gram (1.41). With 0.94M parameters and 13 CPU-minutes it is under-trained (train and validation loss are equal), so the likely fix is more capacity and more steps, which is what the Colab preset is for. I have not run it yet, so I make no claim about the result.
-3. **Definitions: both models are poor** (1.7% and 3.6% key-word overlap). The 4-gram scores higher mostly because it writes longer, wordier definitions that hit more common words (13.5 words against 5.4); neither is a usable definition.
-4. **The embeddings picked up real structure.** Nearest neighbours of ` artery` are ` arteries`, ` vein`, ` veins`, ` vessels`; of ` heart` are ` brain`, ` blood`, ` system`, ` pressure`.
-5. **BPE splits rare terms into many pieces** (about 2.9 characters per token): `hemoglobin` is `hem · og · lo · bin` but `gastrocnemius` is 7 tokens and `thrombocytopenia` 9. A 1,024-token vocabulary is too small to keep medical roots whole, which hurts exactly the terms a student cares about.
+1. **Scale decided it.** The 0.94M-parameter CPU model lost to a 4-gram (1.47 against 1.36 bits per character). The 11.5M-parameter T4 model beats the 4-gram by 0.21 bits per character (1.14 against 1.35) and by 2.1 points of top-1 accuracy. Caveats: one run each, different context lengths and a different tokenizer (compared through bits per character), and the n-gram accuracies are on a subsample.
+2. **It learned the form of a definition and the meaning of word endings, not the facts.** Both `GASTRITIS` and `PERICARDITIS` start with "Inflammation of the", so the `-itis` suffix is understood, but the organ is wrong ("cornea", "temporal bone"). Other definitions are fluent and wrong ("THYME: An instrument for measuring the size of the eye"). Key-word overlap is 4.0%, no better than the 4-gram's 4.6%, which writes longer, wordier definitions.
+3. **Its next-token guesses are sensible.** After "The femur is the" the top choices are ` most`, ` larg(est)` and ` long`.
+4. **The embeddings picked up anatomy.** Nearest neighbours of ` kidney` are ` liver`, ` lung`, ` bladder`, ` uterus`; of ` artery`, ` vein`, ` arteries`, ` vessel`; of ` heart`, ` lung`, ` beat`, ` aorta`, ` ventricle`; of `itis`, `osis` and `ammation`.
+5. **BPE still fragments rare terms** (3.46 characters per token): `hemoglobin` is `hem · oglobin` and `pericarditis` is `per · ic · ard · itis`, but `gastrocnemius` is 6 tokens and `thrombocytopenia` 9.
+6. **More data would help more than more steps:** the gap between training and validation loss (2.41 against 2.74) after 21 passes over a 2M-token corpus points at the data size.
 
 ## Limitations
 
-- **Do not use it for medical facts.** It generates plausible text, not verified knowledge, and its sources are 100 years old: terminology, doses ("Dose gr. ij-x") and treatments are outdated.
-- Single training run, single seed; no confidence intervals. The key-word overlap metric is crude (it ignores synonyms and word order) and the n-gram accuracies use a subsample.
+- **Do not use it for medical facts.** It generates plausible text, not verified knowledge, and its sources are 100 years old: terminology, doses ("Dose gr. ij-x") and treatments are outdated. Most definitions it writes for held-out terms are wrong.
+- One training run per model, one seed; no confidence intervals. The large and small models differ in context length and tokenizer, so the comparison between them is through bits per character only. The small model's row was not regenerated.
+- The key-word overlap metric is crude (it ignores synonyms and word order), and the n-gram accuracies use a subsample.
 - The corpus is OCR text; some noise survives cleaning (garbled words in dictionary entries, "I." for "1.").
-- Rare terms are fragmented by the small BPE vocabulary (finding 5); the context is 128 tokens.
+- Rare terms are fragmented by the BPE vocabulary (finding 5), and the 2M-token corpus is small for 11.5M parameters (finding 6).
 - `explain` needs a chat model of your own (a local Ollama or a free Groq/Gemini key) and is not part of the evaluation; without one it prints the roots and says the tutor is unavailable. Everything else runs locally with no key.
 
 ## Reproduce everything
@@ -146,13 +152,14 @@ $ python -m app.cli define pericarditis -n 2 --seed 3
 ```bash
 python scripts/download_data.py     # 4 books from archive.org into data/raw/ (about 12 MB)
 python scripts/build_corpus.py      # clean -> data/train.txt, data/val.txt, data/glossary.json, results/corpus_stats.md
-python scripts/train.py             # small preset, about 13 minutes on 8 CPU threads -> models/, results/loss.csv
-python scripts/evaluate.py          # -> results/results.md (about 2 minutes)
+python scripts/train.py --preset large --device cuda   # the committed model: a Colab T4, about 20 minutes
+python scripts/train.py             # small preset on CPU (0.94M parameters), about 13 minutes on 8 threads
+python scripts/evaluate.py          # -> results/results.md (about 8 minutes on a laptop CPU for the large model)
 python scripts/render_demo.py       # -> docs/demo.svg from the real CLI
 pytest
 ```
 
-**Bigger model on a free Colab T4** (about 11M parameters, 2,500 steps; I have not run it yet): open [notebooks/colab_train.ipynb](https://colab.research.google.com/github/Sky00raider/medical-terminology-helper/blob/main/notebooks/colab_train.ipynb) in Colab, pick a T4 runtime and Run all. It trains `--preset large --device cuda`, runs `scripts/evaluate.py` and downloads `result.zip` with `models/` and `results/`, which then get committed. The best-validation checkpoint is kept, so overfitting cannot make the saved model worse.
+**Colab T4** (this is how the committed model was trained): open [notebooks/colab_train.ipynb](https://colab.research.google.com/github/Sky00raider/medical-terminology-helper/blob/main/notebooks/colab_train.ipynb) in Colab, pick a T4 runtime and Run all. It trains `--preset large --device cuda`; the evaluation cell is slow on Colab's CPU, so I ran `scripts/evaluate.py` locally instead. The best-validation checkpoint is kept, so overfitting cannot make the saved model worse.
 
 ## Settings and secrets
 

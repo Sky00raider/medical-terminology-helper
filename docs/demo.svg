@@ -1,21 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="709" height="461" viewBox="0 0 709 461">
-<rect width="709" height="461" rx="10" fill="#1e1e2e"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="818" height="461" viewBox="0 0 818 461">
+<rect width="818" height="461" rx="10" fill="#1e1e2e"/>
 <circle cx="20" cy="18" r="6" fill="#f38ba8"/><circle cx="40" cy="18" r="6" fill="#f9e2af"/><circle cx="60" cy="18" r="6" fill="#a6e3a1"/>
 <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" xml:space="preserve">
 <text x="18" y="44" fill="#89b4fa">$ python -m app.cli complete "Inflammation of the" -n 3 --words 14 --seed 1</text>
-<text x="18" y="63" fill="#a6e3a1">  1. Inflammation of the urethra.   [-1.35]</text>
-<text x="18" y="82" fill="#a6e3a1">  2. Inflammation of the abdominal wall.   [-1.56]</text>
-<text x="18" y="101" fill="#a6e3a1">  3. Inflammation of the blood, as the other work of blood.   [-2.80]</text>
+<text x="18" y="63" fill="#a6e3a1">  1. Inflammation of the pia mater.   [-1.48]</text>
+<text x="18" y="82" fill="#a6e3a1">  2. Inflammation of the uterus, the ovarian uterus and of the ovary.   [-1.76]</text>
+<text x="18" y="101" fill="#a6e3a1">  3. Inflammation of the brain, or in the region of the cerebral cortex.   [-2.07]</text>
 <text x="18" y="120" fill="#cdd6f4"></text>
 <text x="18" y="139" fill="#89b4fa">$ python -m app.cli define pericarditis -n 2 --seed 3</text>
-<text x="18" y="158" fill="#a6e3a1">  1. PERICARDITIS. The formation of multipital.   [-1.75]</text>
-<text x="18" y="177" fill="#a6e3a1">  2. PERICARDITIS. The example of the functions of the genital organ.   [-1.87]</text>
+<text x="18" y="158" fill="#a6e3a1">  1. PERICARDITIS. Inflammation of the temporal bone.   [-0.65]</text>
+<text x="18" y="177" fill="#a6e3a1">  2. PERICARDITIS. Inflammation of the spinal cord and a tract of the spinal cord.   [-1.20]</text>
 <text x="18" y="196" fill="#cdd6f4"></text>
 <text x="18" y="215" fill="#89b4fa">$ python -m app.cli next "The femur is the" -k 4</text>
-<text x="18" y="234" fill="#a6e3a1">    3.6%  ' p'</text>
-<text x="18" y="253" fill="#a6e3a1">    2.5%  ' l'</text>
-<text x="18" y="272" fill="#a6e3a1">    2.4%  ' '</text>
-<text x="18" y="291" fill="#a6e3a1">    2.1%  ' t'</text>
+<text x="18" y="234" fill="#cdd6f4">    7.9%  ' most'</text>
+<text x="18" y="253" fill="#cdd6f4">    5.6%  ' larg'</text>
+<text x="18" y="272" fill="#cdd6f4">    4.9%  ' long'</text>
+<text x="18" y="291" fill="#a6e3a1">    2.9%  ' small'</text>
 <text x="18" y="310" fill="#cdd6f4"></text>
 <text x="18" y="329" fill="#89b4fa">$ python -m app.cli roots gastroenteritis</text>
 <text x="18" y="348" fill="#cdd6f4">gastroenteritis: gastr + o + enter + itis</text>
